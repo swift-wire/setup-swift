@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 the swift-wire project authors
+
+name: test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Two promises, each checked on both runner OSes: the requested version is the one `swift` resolves to,
+# and `.swift-version` is neither required nor rewritten. The versions are deliberately different
+# releases so the assertions cannot pass by coincidence.
+jobs:
+  ExplicitVersion:
+    name: swift-version input wins / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Plant a .swift-version that must lose
+        run: printf '6.3.3\n' > .swift-version
+      - uses: ./
+        id: setup
+        with:
+          swift-version: "6.4.0"
+      - name: The requested version is on PATH, and the file is untouched
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -q 'Swift version 6\.4' || { echo "expected 6.4, got the above"; exit 1; }
+          [ "${{ steps.setup.outputs.swift-version }}" = "6.4.0" ]
+          [ "$(printf '6.3.3\n' | cmp - .swift-version && echo same)" = same ] || { echo ".swift-version was rewritten"; exit 1; }
+      - name: The toolchain is complete enough to build and run a package
+        run: |
+          mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          swift package init --type executable --name Smoke
+          swift run
+
+  FileVersion:
+    name: .swift-version fallback / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Name the toolchain in .swift-version only
+        run: printf '6.3.3\n' > .swift-version
+      - uses: ./
+        id: setup
+      - name: The file's version is on PATH
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -q 'Swift version 6\.3\.3' || { echo "expected 6.3.3, got the above"; exit 1; }
+          [ "${{ steps.setup.outputs.swift-version }}" = "6.3.3" ]
+
+  NoVersionAnywhere:
+    name: fails clearly with nothing to install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./
+        id: setup
+        continue-on-error: true
+      - name: The action refused rather than installing something
+        run: |
+          [ "${{ steps.setup.outcome }}" = failure ] || { echo "expected the action to fail without a version"; exit 1; }
